@@ -480,23 +480,45 @@ impl JsonSchemaConverter {
     }
 
     /// Convert array type
+    ///
+    /// Supports:
+    /// - `items`: schema for all array elements (homogeneous array)
+    /// - `prefixItems`: schemas for positional elements (tuple-like)
+    /// - Both: prefixItems first, then items for additional elements
     fn convert_array_type(
         &mut self,
         schema: &serde_json::Map<String, Value>,
     ) -> Result<Expr, JsonSchemaError> {
-        // Get items schema if present
-        let items_expr = if let Some(items) = schema.get("items") {
+        let prefix_items = schema.get("prefixItems").and_then(|p| p.as_array());
+        let items_schema = schema.get("items");
+
+        match (prefix_items, items_schema) {
+            // Only prefixItems: tuple with fixed elements
+            (Some(prefix), None) => self.convert_tuple_array(prefix, None),
+
+            // Both prefixItems and items: tuple prefix + additional items
+            (Some(prefix), Some(items)) => self.convert_tuple_array(prefix, Some(items)),
+
+            // Only items or neither: homogeneous array
+            _ => self.convert_homogeneous_array(items_schema),
+        }
+    }
+
+    /// Convert a homogeneous array (all elements same type)
+    fn convert_homogeneous_array(
+        &mut self,
+        items_schema: Option<&Value>,
+    ) -> Result<Expr, JsonSchemaError> {
+        let items_expr = if let Some(items) = items_schema {
             self.convert_schema(items)?
         } else {
             Expr::NonTerminal("json-value".to_string())
         };
 
-        // Create a rule for the item type
         let item_rule = self.next_rule_name("item");
         self.declarations
             .push(GbnfDeclaration::new(item_rule.clone(), items_expr));
 
-        // Build array expression
         let rule_name = self.next_rule_name("array");
         let expr = Expr::Sequence(vec![
             Expr::Characters("[".to_string()),
@@ -522,6 +544,72 @@ impl JsonSchemaConverter {
 
         self.declarations
             .push(GbnfDeclaration::new(rule_name.clone(), expr));
+        Ok(Expr::NonTerminal(rule_name))
+    }
+
+    /// Convert a tuple array (prefixItems with optional trailing items)
+    fn convert_tuple_array(
+        &mut self,
+        prefix_items: &[Value],
+        additional_items: Option<&Value>,
+    ) -> Result<Expr, JsonSchemaError> {
+        if prefix_items.is_empty() {
+            // No prefix items, fall back to homogeneous array
+            return self.convert_homogeneous_array(additional_items);
+        }
+
+        // Convert each prefix item schema to a rule
+        let mut prefix_rules: Vec<String> = Vec::new();
+        for (i, item_schema) in prefix_items.iter().enumerate() {
+            let item_expr = self.convert_schema(item_schema)?;
+            let rule_name = self.next_rule_name(&format!("tuple-item-{}", i));
+            self.declarations
+                .push(GbnfDeclaration::new(rule_name.clone(), item_expr));
+            prefix_rules.push(rule_name);
+        }
+
+        // Build the tuple expression: "[" ws item0 ws "," ws item1 ... "]"
+        let mut parts: Vec<Expr> = vec![
+            Expr::Characters("[".to_string()),
+            Expr::NonTerminal("ws".to_string()),
+        ];
+
+        // Add first prefix item
+        parts.push(Expr::NonTerminal(prefix_rules[0].clone()));
+
+        // Add remaining prefix items with comma separators
+        for rule in prefix_rules.iter().skip(1) {
+            parts.push(Expr::NonTerminal("ws".to_string()));
+            parts.push(Expr::Characters(",".to_string()));
+            parts.push(Expr::NonTerminal("ws".to_string()));
+            parts.push(Expr::NonTerminal(rule.clone()));
+        }
+
+        // Add additional items if specified
+        if let Some(items_schema) = additional_items {
+            let items_expr = self.convert_schema(items_schema)?;
+            let items_rule = self.next_rule_name("tuple-rest");
+            self.declarations
+                .push(GbnfDeclaration::new(items_rule.clone(), items_expr));
+
+            // (ws "," ws item)*
+            parts.push(Expr::Quantified {
+                expr: Box::new(Expr::Sequence(vec![
+                    Expr::NonTerminal("ws".to_string()),
+                    Expr::Characters(",".to_string()),
+                    Expr::NonTerminal("ws".to_string()),
+                    Expr::NonTerminal(items_rule),
+                ])),
+                quantifier: Quantifier::ZeroOrMore,
+            });
+        }
+
+        parts.push(Expr::NonTerminal("ws".to_string()));
+        parts.push(Expr::Characters("]".to_string()));
+
+        let rule_name = self.next_rule_name("tuple");
+        self.declarations
+            .push(GbnfDeclaration::new(rule_name.clone(), Expr::Sequence(parts)));
         Ok(Expr::NonTerminal(rule_name))
     }
 
@@ -921,6 +1009,55 @@ mod tests {
         // Should have additional property rule referencing json-boolean
         assert!(gbnf.contains("addl-prop"));
         assert!(gbnf.contains("json-boolean"));
+    }
+
+    #[test]
+    fn test_prefix_items_tuple() {
+        // Tuple: [string, integer, boolean]
+        let schema = r#"{
+            "type": "array",
+            "prefixItems": [
+                {"type": "string"},
+                {"type": "integer"},
+                {"type": "boolean"}
+            ]
+        }"#;
+        let grammar = json_schema_to_grammar(schema).unwrap();
+        let gbnf = grammar.as_str();
+        eprintln!("Generated grammar:\n{}", gbnf);
+
+        // Should have tuple item rules
+        assert!(gbnf.contains("tuple-item-0"));
+        assert!(gbnf.contains("tuple-item-1"));
+        assert!(gbnf.contains("tuple-item-2"));
+        // Should reference the proper types
+        assert!(gbnf.contains("json-string"));
+        assert!(gbnf.contains("json-integer"));
+        assert!(gbnf.contains("json-boolean"));
+    }
+
+    #[test]
+    fn test_prefix_items_with_additional() {
+        // Tuple with additional items: [string, integer, ...numbers]
+        let schema = r#"{
+            "type": "array",
+            "prefixItems": [
+                {"type": "string"},
+                {"type": "integer"}
+            ],
+            "items": {"type": "number"}
+        }"#;
+        let grammar = json_schema_to_grammar(schema).unwrap();
+        let gbnf = grammar.as_str();
+        eprintln!("Generated grammar:\n{}", gbnf);
+
+        // Should have tuple item rules for prefix
+        assert!(gbnf.contains("tuple-item-0"));
+        assert!(gbnf.contains("tuple-item-1"));
+        // Should have a rule for additional items
+        assert!(gbnf.contains("tuple-rest"));
+        // Should reference json-number for additional items
+        assert!(gbnf.contains("json-number"));
     }
 
     #[test]
