@@ -1,4 +1,4 @@
-use gbnf::{gbnf, GbnfGrammar};
+use gbnf::{GbnfGrammar, gbnf};
 
 #[test]
 fn test_basic_declarations() {
