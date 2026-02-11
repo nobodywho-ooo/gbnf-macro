@@ -123,15 +123,6 @@ impl JsonSchemaConverter {
 
             // JSON null
             json-null ::= "null"
-
-            // Generic JSON value
-            json-value ::= json-string | json-number | json-boolean | json-null | json-array | json-object
-
-            // Generic JSON array
-            json-array ::= "[" ws (json-value (ws "," ws json-value)*)? ws "]"
-
-            // Generic JSON object
-            json-object ::= "{" ws (json-string ws ":" ws json-value (ws "," ws json-string ws ":" ws json-value)*)? ws "}"
         };
 
         self.declarations.extend(primitives.declarations);
