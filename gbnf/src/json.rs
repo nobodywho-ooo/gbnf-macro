@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Error type for JSON Schema conversion
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsonSchemaError {
-    /// The schema is not a valid JSON object
+    /// The schema is not a valid JSON schema
     InvalidSchema(String),
     /// Unsupported JSON Schema feature
     UnsupportedFeature(String),
@@ -54,13 +54,6 @@ impl JsonSchemaConverter {
             definitions: HashMap::new(),
             converted_refs: HashMap::new(),
         }
-    }
-
-    /// Convert a JSON Schema string to a GBNF Grammar
-    pub fn convert_str(&mut self, schema: &str) -> Result<GbnfGrammar, JsonSchemaError> {
-        let value: Value = serde_json::from_str(schema)
-            .map_err(|e| JsonSchemaError::InvalidJson(e.to_string()))?;
-        self.convert(&value)
     }
 
     /// Convert a JSON Schema value to a GBNF Grammar
@@ -608,8 +601,10 @@ impl JsonSchemaConverter {
         parts.push(Expr::Characters("]".to_string()));
 
         let rule_name = self.next_rule_name("tuple");
-        self.declarations
-            .push(GbnfDeclaration::new(rule_name.clone(), Expr::Sequence(parts)));
+        self.declarations.push(GbnfDeclaration::new(
+            rule_name.clone(),
+            Expr::Sequence(parts),
+        ));
         Ok(Expr::NonTerminal(rule_name))
     }
 
@@ -896,6 +891,12 @@ impl IntoJsonSchema for &Value {
 /// ```
 pub fn json_schema_to_grammar(schema: impl IntoJsonSchema) -> Result<GbnfGrammar, JsonSchemaError> {
     let value = schema.into_schema()?;
+    if !jsonschema::meta::is_valid(&value) {
+        return Err(JsonSchemaError::InvalidSchema(format!(
+            "Not a valid json schema: {}",
+            value
+        )));
+    };
     let mut converter = JsonSchemaConverter::new();
     converter.convert(&value)
 }
@@ -1058,6 +1059,17 @@ mod tests {
         assert!(gbnf.contains("tuple-rest"));
         // Should reference json-number for additional items
         assert!(gbnf.contains("json-number"));
+    }
+
+    #[test]
+    fn test_nonsense_schema() {
+        let schema = r#"
+        { "type" : "string", "items" : "integer", "text" : "hello"}
+        "#;
+
+        let grammar = json_schema_to_grammar(schema);
+
+        assert!(matches!(grammar, Err(JsonSchemaError::InvalidSchema(_))));
     }
 
     #[test]
