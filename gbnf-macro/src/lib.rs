@@ -10,7 +10,7 @@ pub fn gbnf(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         {
             let declarations = vec![#(#decl_tokens),*];
-            ::gbnf::GbnfGrammar::new(declarations)
+            ::gbnf_types::GbnfGrammar::new(declarations)
         }
     };
 

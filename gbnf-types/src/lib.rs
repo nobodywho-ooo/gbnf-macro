@@ -62,7 +62,7 @@ impl GbnfDeclaration {
         let name = &self.name;
         let expr_tokens = self.expr.to_tokens();
         quote! {
-            ::gbnf::GbnfDeclaration::new(#name.to_string(), #expr_tokens)
+            ::gbnf_types::GbnfDeclaration::new(#name.to_string(), #expr_tokens)
         }
     }
 }
@@ -129,7 +129,7 @@ impl CharacterRange {
                 negated,
             } => {
                 quote! {
-                    ::gbnf::CharacterRange::Range {
+                    ::gbnf_types::CharacterRange::Range {
                         begin: #begin,
                         end: #end,
                         negated: #negated,
@@ -138,7 +138,7 @@ impl CharacterRange {
             }
             CharacterRange::Set { chars, negated } => {
                 quote! {
-                    ::gbnf::CharacterRange::Set {
+                    ::gbnf_types::CharacterRange::Set {
                         chars: vec![#(#chars),*],
                         negated: #negated,
                     }
@@ -223,12 +223,12 @@ impl Quantifier {
     /// Generate tokens for constructing this quantifier at compile time
     pub fn to_tokens(&self) -> TokenStream2 {
         match self {
-            Quantifier::Optional => quote! { ::gbnf::Quantifier::Optional },
-            Quantifier::OneOrMore => quote! { ::gbnf::Quantifier::OneOrMore },
-            Quantifier::ZeroOrMore => quote! { ::gbnf::Quantifier::ZeroOrMore },
-            Quantifier::Exact(n) => quote! { ::gbnf::Quantifier::Exact(#n) },
-            Quantifier::AtLeast(n) => quote! { ::gbnf::Quantifier::AtLeast(#n) },
-            Quantifier::Range(n, m) => quote! { ::gbnf::Quantifier::Range(#n, #m) },
+            Quantifier::Optional => quote! { ::gbnf_types::Quantifier::Optional },
+            Quantifier::OneOrMore => quote! { ::gbnf_types::Quantifier::OneOrMore },
+            Quantifier::ZeroOrMore => quote! { ::gbnf_types::Quantifier::ZeroOrMore },
+            Quantifier::Exact(n) => quote! { ::gbnf_types::Quantifier::Exact(#n) },
+            Quantifier::AtLeast(n) => quote! { ::gbnf_types::Quantifier::AtLeast(#n) },
+            Quantifier::Range(n, m) => quote! { ::gbnf_types::Quantifier::Range(#n, #m) },
         }
     }
 }
@@ -300,12 +300,12 @@ impl TokenRef {
         match self {
             TokenRef::ById { id, negated } => {
                 quote! {
-                    ::gbnf::TokenRef::ById { id: #id, negated: #negated }
+                    ::gbnf_types::TokenRef::ById { id: #id, negated: #negated }
                 }
             }
             TokenRef::ByString { name, negated } => {
                 quote! {
-                    ::gbnf::TokenRef::ByString { name: #name.to_string(), negated: #negated }
+                    ::gbnf_types::TokenRef::ByString { name: #name.to_string(), negated: #negated }
                 }
             }
         }
@@ -371,36 +371,36 @@ impl Expr {
     pub fn to_tokens(&self) -> TokenStream2 {
         match self {
             Expr::Characters(s) => {
-                quote! { ::gbnf::Expr::Characters(#s.to_string()) }
+                quote! { ::gbnf_types::Expr::Characters(#s.to_string()) }
             }
             Expr::CharacterRange(r) => {
                 let range_tokens = r.to_tokens();
-                quote! { ::gbnf::Expr::CharacterRange(#range_tokens) }
+                quote! { ::gbnf_types::Expr::CharacterRange(#range_tokens) }
             }
             Expr::Token(t) => {
                 let token_tokens = t.to_tokens();
-                quote! { ::gbnf::Expr::Token(#token_tokens) }
+                quote! { ::gbnf_types::Expr::Token(#token_tokens) }
             }
             Expr::NonTerminal(name) => {
-                quote! { ::gbnf::Expr::NonTerminal(#name.to_string()) }
+                quote! { ::gbnf_types::Expr::NonTerminal(#name.to_string()) }
             }
             Expr::Group(inner) => {
                 let inner_tokens = inner.to_tokens();
-                quote! { ::gbnf::Expr::Group(Box::new(#inner_tokens)) }
+                quote! { ::gbnf_types::Expr::Group(Box::new(#inner_tokens)) }
             }
             Expr::Sequence(items) => {
                 let item_tokens: Vec<_> = items.iter().map(|e| e.to_tokens()).collect();
-                quote! { ::gbnf::Expr::Sequence(vec![#(#item_tokens),*]) }
+                quote! { ::gbnf_types::Expr::Sequence(vec![#(#item_tokens),*]) }
             }
             Expr::Alternation(alts) => {
                 let alt_tokens: Vec<_> = alts.iter().map(|e| e.to_tokens()).collect();
-                quote! { ::gbnf::Expr::Alternation(vec![#(#alt_tokens),*]) }
+                quote! { ::gbnf_types::Expr::Alternation(vec![#(#alt_tokens),*]) }
             }
             Expr::Quantified { expr, quantifier } => {
                 let expr_tokens = expr.to_tokens();
                 let quant_tokens = quantifier.to_tokens();
                 quote! {
-                    ::gbnf::Expr::Quantified {
+                    ::gbnf_types::Expr::Quantified {
                         expr: Box::new(#expr_tokens),
                         quantifier: #quant_tokens,
                     }
@@ -524,16 +524,36 @@ impl Parse for GbnfInput {
 // Helper functions for parsing
 
 /// Parse and validate a non-terminal symbol (must be lowercase with dashes)
+/// Handles hyphenated names like `json-string` by consuming ident-dash-ident sequences
 fn parse_non_terminal(input: ParseStream) -> Result<String> {
-    let ident: Ident = input.parse()?;
-    let name = ident.to_string();
+    let first_ident: Ident = input.parse()?;
+    let first_name = first_ident.to_string();
 
-    // Validate: must be lowercase letters and dashes only
-    if !name.chars().all(|c| c.is_lowercase() || c == '-') {
+    // Validate first part: must be lowercase letters only
+    if !first_name.chars().all(|c| c.is_lowercase()) {
         return Err(syn::Error::new_spanned(
-            ident,
-            "non-terminal symbols must be dashed lowercase words (e.g., 'move', 'castle', 'check-mate')",
+            first_ident,
+            "non-terminal symbols must be lowercase words (e.g., 'move', 'castle', 'json-string')",
         ));
+    }
+
+    let mut name = first_name;
+
+    // Keep consuming -ident sequences
+    while input.peek(Token![-]) && input.peek2(Ident) {
+        input.parse::<Token![-]>()?;
+        let next_ident: Ident = input.parse()?;
+        let next_name = next_ident.to_string();
+
+        if !next_name.chars().all(|c| c.is_lowercase()) {
+            return Err(syn::Error::new_spanned(
+                next_ident,
+                "non-terminal symbols must be lowercase words",
+            ));
+        }
+
+        name.push('-');
+        name.push_str(&next_name);
     }
 
     Ok(name)
@@ -541,7 +561,13 @@ fn parse_non_terminal(input: ParseStream) -> Result<String> {
 
 /// Parse a single character from various token forms
 fn parse_char(input: ParseStream) -> Result<char> {
-    // Try to parse as an identifier (like 'a', 'z', etc.)
+    // Try to parse as a character literal (like '\t', ' ', 'a')
+    if input.peek(syn::LitChar) {
+        let lit: syn::LitChar = input.parse()?;
+        return Ok(lit.value());
+    }
+
+    // Try to parse as an identifier (like a, z, etc.)
     if let Ok(ident) = input.parse::<Ident>() {
         let s = ident.to_string();
         if s.len() == 1 {
@@ -553,7 +579,7 @@ fn parse_char(input: ParseStream) -> Result<char> {
         ));
     }
 
-    // Try to parse as a literal (for numbers like '0', '9')
+    // Try to parse as a literal (for numbers like 0, 9)
     if let Ok(lit) = input.parse::<syn::LitInt>() {
         let s = lit.to_string();
         if s.len() == 1 {
@@ -562,7 +588,7 @@ fn parse_char(input: ParseStream) -> Result<char> {
         return Err(syn::Error::new_spanned(lit, "expected a single digit"));
     }
 
-    Err(input.error("expected a character"))
+    Err(input.error("expected a character (e.g., a, 0, or '\\t')"))
 }
 
 /// Parse token references: <[1000]> or <think>
@@ -593,10 +619,27 @@ fn parse_token_ref(input: ParseStream, negated: bool) -> Result<TokenRef> {
 }
 
 /// Check if we're at the start of a new declaration
+/// Handles hyphenated names like `json-string ::= ...`
 fn is_at_new_declaration(input: ParseStream) -> bool {
     let fork = input.fork();
-    fork.parse::<Ident>().is_ok()
-        && fork.parse::<Token![:]>().is_ok()
+
+    // Parse the first identifier
+    if fork.parse::<Ident>().is_err() {
+        return false;
+    }
+
+    // Skip any -ident sequences (for hyphenated names)
+    while fork.peek(Token![-]) && fork.peek2(Ident) {
+        if fork.parse::<Token![-]>().is_err() {
+            return false;
+        }
+        if fork.parse::<Ident>().is_err() {
+            return false;
+        }
+    }
+
+    // Now check for ::=
+    fork.parse::<Token![:]>().is_ok()
         && fork.parse::<Token![:]>().is_ok()
         && fork.parse::<Token![=]>().is_ok()
 }
