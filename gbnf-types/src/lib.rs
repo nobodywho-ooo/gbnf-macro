@@ -114,8 +114,15 @@ impl CharacterRange {
             }
             CharacterRange::Set { chars, negated } => {
                 let neg = if *negated { "^" } else { "" };
-                let chars_str: String = chars.iter().map(|c| escape_char(*c)).collect();
-                format!("[{}{}]", neg, chars_str)
+                // Put '-' at the end so it's not interpreted as a range delimiter
+                let has_dash = chars.contains(&'-');
+                let chars_str: String = chars
+                    .iter()
+                    .filter(|&&c| c != '-')
+                    .map(|c| escape_char(*c))
+                    .collect();
+                let dash = if has_dash { "-" } else { "" };
+                format!("[{}{}{}]", neg, chars_str, dash)
             }
         }
     }
@@ -655,7 +662,8 @@ fn escape_char(c: char) -> String {
         '\\' => "\\\\".to_string(),
         ']' => "\\]".to_string(),
         '^' => "\\^".to_string(),
-        '-' => "\\-".to_string(),
+        // Note: '-' is handled specially in CharacterRange::Set::to_gbnf()
+        // by placing it at the end of the set
         _ => c.to_string(),
     }
 }
