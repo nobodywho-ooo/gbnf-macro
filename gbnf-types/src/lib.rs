@@ -660,6 +660,7 @@ fn escape_char(c: char) -> String {
         '\r' => "\\r".to_string(),
         '\t' => "\\t".to_string(),
         '\\' => "\\\\".to_string(),
+        '"' => "\\\"".to_string(),
         ']' => "\\]".to_string(),
         '^' => "\\^".to_string(),
         // Note: '-' is handled specially in CharacterRange::Set::to_gbnf()
