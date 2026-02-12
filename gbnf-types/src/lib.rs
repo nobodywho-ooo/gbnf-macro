@@ -654,15 +654,17 @@ fn is_at_new_declaration(input: ParseStream) -> bool {
 // Helper functions for string generation
 
 /// Escape a character for GBNF character ranges
+/// Note: Inside [...] character classes, " does NOT need escaping in llama.cpp GBNF
 fn escape_char(c: char) -> String {
     match c {
         '\n' => "\\n".to_string(),
         '\r' => "\\r".to_string(),
         '\t' => "\\t".to_string(),
         '\\' => "\\\\".to_string(),
-        '"' => "\\\"".to_string(),
         ']' => "\\]".to_string(),
         '^' => "\\^".to_string(),
+        // Control characters (0x00-0x1F) and DEL (0x7F) as hex escapes
+        c if c.is_ascii_control() => format!("\\x{:02X}", c as u32),
         // Note: '-' is handled specially in CharacterRange::Set::to_gbnf()
         // by placing it at the end of the set
         _ => c.to_string(),

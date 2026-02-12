@@ -99,15 +99,11 @@ impl JsonSchemaConverter {
 
     /// Add common JSON primitive rules using the gbnf! macro for cleaner definitions
     fn add_json_primitives(&mut self) {
+        use crate::CharacterRange;
+
         let primitives = gbnf! {
             // Whitespace (optional)
             ws ::= [' ' '\t' '\n' '\r']*
-
-            // JSON string: "..." with escape sequences
-            json-string ::= "\"" json-string-char* "\""
-            json-string-char ::= [^'"' '\\'] | "\\" json-escape
-            json-escape ::= ['"' '\\' 'b' 'f' 'n' 'r' 't'] | "u" hex-digit hex-digit hex-digit hex-digit
-            hex-digit ::= [0-9] | [a-f] | [A-F]
 
             // JSON number: -?int(.frac)?(e[+-]?int)?
             json-number ::= "-"? json-int json-frac? json-exp?
@@ -126,6 +122,67 @@ impl JsonSchemaConverter {
         };
 
         self.declarations.extend(primitives.declarations);
+
+        // JSON string rules from llama.cpp docs:
+        // json-char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+        // json-string ::= "\"" json-char* "\""
+
+        // Build excluded chars: " \ DEL and control chars 0x00-0x1F
+        let mut excluded_chars: Vec<char> = vec!['"', '\\', '\x7F'];
+        excluded_chars.extend((0x00u8..=0x1Fu8).map(|b| b as char));
+
+        // Hex digits for unicode escapes
+        let hex_chars: Vec<char> = "0123456789abcdefABCDEF".chars().collect();
+
+        // json-char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+        self.declarations.push(GbnfDeclaration::new(
+            "json-char".to_string(),
+            Expr::Alternation(vec![
+                // [^"\\\x7F\x00-\x1F]
+                Expr::CharacterRange(CharacterRange::Set {
+                    chars: excluded_chars,
+                    negated: true,
+                }),
+                // [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                Expr::Sequence(vec![
+                    Expr::CharacterRange(CharacterRange::Set {
+                        chars: vec!['\\'],
+                        negated: false,
+                    }),
+                    Expr::Group(Box::new(Expr::Alternation(vec![
+                        // ["\\bfnrt]
+                        Expr::CharacterRange(CharacterRange::Set {
+                            chars: vec!['"', '\\', 'b', 'f', 'n', 'r', 't'],
+                            negated: false,
+                        }),
+                        // "u" [0-9a-fA-F]{4}
+                        Expr::Sequence(vec![
+                            Expr::Characters("u".to_string()),
+                            Expr::Quantified {
+                                expr: Box::new(Expr::CharacterRange(CharacterRange::Set {
+                                    chars: hex_chars,
+                                    negated: false,
+                                })),
+                                quantifier: Quantifier::Exact(4),
+                            },
+                        ]),
+                    ]))),
+                ]),
+            ]),
+        ));
+
+        // json-string ::= "\"" json-char* "\""
+        self.declarations.push(GbnfDeclaration::new(
+            "json-string".to_string(),
+            Expr::Sequence(vec![
+                Expr::Characters("\"".to_string()),
+                Expr::Quantified {
+                    expr: Box::new(Expr::NonTerminal("json-char".to_string())),
+                    quantifier: Quantifier::ZeroOrMore,
+                },
+                Expr::Characters("\"".to_string()),
+            ]),
+        ));
     }
 
     /// Generate a unique rule name
